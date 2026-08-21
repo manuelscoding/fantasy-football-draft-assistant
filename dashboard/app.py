@@ -97,7 +97,14 @@ with tab1:
     with col3:
         hide_drafted = st.checkbox("Hide drafted players", value=True)
 
-    board = build_draft_board(projections, league_size=league_size, rosters=roster)
+    # board_all (all positions, drafted players included) is the source of
+    # truth for the "mark players drafted" widget below — it must never
+    # shrink just because the display filters (pos_filter/hide_drafted) hide
+    # a player, or Streamlit treats the multiselect's changed `options` as a
+    # new widget instance, drops the now-invalid default, and silently wipes
+    # st.session_state.drafted back to empty on the very next rerun.
+    board_all = build_draft_board(projections, league_size=league_size, rosters=roster)
+    board = board_all
     if pos_filter:
         board = board[board["position"].isin(pos_filter)]
     if hide_drafted:
@@ -139,14 +146,15 @@ with tab1:
     # build the label from same-indexed columns *before* reindexing by
     # player_id — adding series with mismatched indexes (player_id vs the
     # default range index) silently aligns to all-NaN instead of erroring
-    label = (board["player_display_name"] + " (" + board["position"] + ", "
-              + board["team"].fillna("FA") + ")")
-    draft_names = label.set_axis(board["player_id"])
+    label = (board_all["player_display_name"] + " (" + board_all["position"] + ", "
+              + board_all["team"].fillna("FA") + ")")
+    draft_names = label.set_axis(board_all["player_id"])
     picked = st.multiselect(
         "Select players as they're drafted (by you or anyone else)",
         options=draft_names.index.tolist(),
         format_func=lambda pid: draft_names.get(pid, pid),
         default=list(st.session_state.drafted & set(draft_names.index)),
+        key="drafted_multiselect",
     )
     st.session_state.drafted = set(picked)
 
