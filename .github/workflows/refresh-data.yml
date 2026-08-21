@@ -1,0 +1,45 @@
+name: Refresh historical data
+
+# Rebuilds the committed data/processed/*.csv base data the dashboard reads
+# on startup (player season history + projections). The dashboard itself
+# pulls the live current-season roster directly from nflverse on every
+# cache refresh — this job only needs to run often enough to pick up newly
+# completed seasons and each player's latest totals. Weekly is plenty:
+# unlike live match data, season stat files only change after games are
+# played and nflverse has finalized them.
+on:
+  schedule:
+    - cron: "0 6 * * 1"  # 06:00 UTC every Monday
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install pipeline dependencies
+        run: pip install pandas numpy scikit-learn requests fastparquet
+
+      - name: Fetch + rebuild historical data
+        working-directory: src
+        run: |
+          python fetch_player_stats.py
+          python build_dataset.py
+          python projections_model.py
+
+      - name: Commit refreshed data if changed
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add data/processed/player_season_history.csv \
+                  data/processed/player_projections.csv
+          git diff --cached --quiet || git commit -m "Weekly data refresh"
+          git push

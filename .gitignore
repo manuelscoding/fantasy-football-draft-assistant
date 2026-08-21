@@ -1,0 +1,8 @@
+venv/
+__pycache__/
+*.pyc
+.DS_Store
+
+# raw per-season pulls are large and easy to regenerate via
+# src/fetch_player_stats.py + src/fetch_rosters.py; not needed at runtime
+data/raw/
