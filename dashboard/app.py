@@ -83,8 +83,10 @@ projections = compute_projections()
 st.caption(f"🔄 Roster data as of {fetched_at.strftime('%Y-%m-%d %H:%M UTC')} "
            f"— refreshes automatically every {REFRESH_TTL_SECONDS // 3600} hours.")
 
-if "drafted" not in st.session_state:
-    st.session_state.drafted = set()
+if "my_team" not in st.session_state:
+    st.session_state.my_team = set()
+if "other_drafted" not in st.session_state:
+    st.session_state.other_drafted = set()
 
 tab1, tab2, tab3 = st.tabs(["Draft Board", "Player Projections", "My Team"])
 
@@ -95,20 +97,21 @@ with tab1:
     with col2:
         pos_filter = st.multiselect("Position", list(BASE_REPLACEMENT_RANK.keys()))
     with col3:
-        hide_drafted = st.checkbox("Hide drafted players", value=True)
+        hide_drafted = st.checkbox("Hide players already taken", value=True)
 
-    # board_all (all positions, drafted players included) is the source of
-    # truth for the "mark players drafted" widget below — it must never
-    # shrink just because the display filters (pos_filter/hide_drafted) hide
-    # a player, or Streamlit treats the multiselect's changed `options` as a
-    # new widget instance, drops the now-invalid default, and silently wipes
-    # st.session_state.drafted back to empty on the very next rerun.
+    # board_all (all positions, taken players included) is the source of
+    # truth for the pick-tracking widgets below — it must never shrink just
+    # because the display filters (pos_filter/hide_drafted) hide a player,
+    # or Streamlit treats a multiselect's changed `options` as a new widget
+    # instance, drops the now-invalid default, and silently wipes the pick
+    # back out of session state on the very next rerun.
     board_all = build_draft_board(projections, league_size=league_size, rosters=roster)
+    taken = st.session_state.my_team | st.session_state.other_drafted
     board = board_all
     if pos_filter:
         board = board[board["position"].isin(pos_filter)]
     if hide_drafted:
-        board = board[~board["player_id"].isin(st.session_state.drafted)]
+        board = board[~board["player_id"].isin(taken)]
 
     st.subheader(f"Draft board — top available ({league_size}-team league)")
     st.caption("Ranked by Value Above Replacement (VBD): projected PPR points minus what a "
@@ -142,21 +145,42 @@ with tab1:
         hide_index=True, use_container_width=True, height=500,
     )
 
-    st.subheader("Mark players drafted")
+    st.subheader("Track picks")
+    st.caption("Draft a player to your own team, or mark them as taken by another team — either "
+               "way they drop off the available board above once picked. A player can only "
+               "belong to one list at a time.")
     # build the label from same-indexed columns *before* reindexing by
     # player_id — adding series with mismatched indexes (player_id vs the
     # default range index) silently aligns to all-NaN instead of erroring
     label = (board_all["player_display_name"] + " (" + board_all["position"] + ", "
               + board_all["team"].fillna("FA") + ")")
-    draft_names = label.set_axis(board_all["player_id"])
-    picked = st.multiselect(
-        "Select players as they're drafted (by you or anyone else)",
-        options=draft_names.index.tolist(),
-        format_func=lambda pid: draft_names.get(pid, pid),
-        default=list(st.session_state.drafted & set(draft_names.index)),
-        key="drafted_multiselect",
-    )
-    st.session_state.drafted = set(picked)
+    all_names = label.set_axis(board_all["player_id"])
+
+    col_mine, col_other = st.columns(2)
+    with col_mine:
+        # excluding other_drafted (rather than filtering by my_team itself)
+        # keeps every already-selected my_team player a valid option, so
+        # this widget never hits the same reset bug the hide_drafted filter
+        # used to cause
+        mine_options = [pid for pid in all_names.index if pid not in st.session_state.other_drafted]
+        picked_mine = st.multiselect(
+            "Draft to my team",
+            options=mine_options,
+            format_func=lambda pid: all_names.get(pid, pid),
+            default=list(st.session_state.my_team & set(mine_options)),
+            key="my_team_multiselect",
+        )
+        st.session_state.my_team = set(picked_mine)
+    with col_other:
+        other_options = [pid for pid in all_names.index if pid not in st.session_state.my_team]
+        picked_other = st.multiselect(
+            "Other team selected",
+            options=other_options,
+            format_func=lambda pid: all_names.get(pid, pid),
+            default=list(st.session_state.other_drafted & set(other_options)),
+            key="other_drafted_multiselect",
+        )
+        st.session_state.other_drafted = set(picked_other)
 
 with tab2:
     position = st.selectbox("Position", list(BASE_REPLACEMENT_RANK.keys()), key="proj_position")
@@ -183,10 +207,11 @@ with tab2:
 
 with tab3:
     st.subheader("My team")
-    if not st.session_state.drafted:
-        st.info("No players marked drafted yet — use the Draft Board tab to build your team as you draft.")
+    if not st.session_state.my_team:
+        st.info("No players drafted to your team yet — use the Draft Board tab's \"Draft to my "
+                 "team\" picker to build your team as you draft.")
     else:
-        mine = projections[projections["player_id"].isin(st.session_state.drafted)]
+        mine = projections[projections["player_id"].isin(st.session_state.my_team)]
         mine = mine.dropna(subset=["pred_fantasy_points_ppr"]).sort_values(
             "pred_fantasy_points_ppr", ascending=False
         )
